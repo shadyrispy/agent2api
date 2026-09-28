@@ -442,7 +442,10 @@ impl ProviderAdapter for WorkBuddyAdapter {
     /// ── 与本家「透传逐字节不变」那条硬要求的关系 ────────────────
     /// 那条要求说的是**网关不得擅自改写上游帧**；这里丢的正是上游擅自塞进
     /// 正文的节拍，而且是**显式开关**（判据见 `upstream::sse::is_newline_keepalive`，
-    /// 关掉即回到逐字节一致）。取舍：模型若真有一个「单独成片」的换行，会被
+    /// 关掉即回到逐字节一致）。本家这一位只是"允许"，真正生效还要
+    /// `stripNewlineKeepalive` 开着（`/api/keepalive-strip` 或环境变量
+    /// `AGENT2API_STRIP_NEWLINE_KEEPALIVE`，**默认关**）。
+    /// 取舍：模型若真有一个「单独成片」的换行，会被
     /// 一起吃掉 —— 少一个换行的外观损失，换掉整屏断句。
     fn sse_strip_newline_chunks(&self) -> bool {
         true

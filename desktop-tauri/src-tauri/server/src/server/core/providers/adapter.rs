@@ -107,6 +107,10 @@
 //!      可能真是模型写的换行，所以由适配器回答，执行落在 `upstream::sse` 这个
 //!      SSE 逐行解析的唯一出口（与 `sse_model_rewrite` 同一分工、同一位置）。
 //!      **默认 false**：没声明的 provider 下发帧逐字节不变。
+//!      声明了也不等于会丢 —— 还要 `stripNewlineKeepalive` 这个**部署开关**开着
+//!      （默认关，见 `config::KEY_STRIP_NEWLINE_KEEPALIVE`）：能力位回答"这家的
+//!      上游会不会发"，开关回答"这台机器要不要为它改字节"，两者相与，且开关只能
+//!      收窄不能扩张（见 `upstream::sse::FramePolicy::assembled`）。
 //!
 //! ── 未注册的 provider 怎么办 ────────────────────────────────
 //! 四家 provider 在 [`adapter_for`] 里各自接上真身，那个 match 是穷举的：
