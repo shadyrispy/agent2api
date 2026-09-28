@@ -205,10 +205,23 @@ export function LimitsCell({ account, open }: { account: AccountRecord; open: bo
  * 有效期：按「这家有没有版本概念」选字段（workbuddy 是 expiresAt，其余是
  * tokenExpiresAt），与域层的 tokenExpiryOf 同口径。文案收短成「30 天后」，
  * 完整句留在 title —— 列宽有限。
+ *
+ * 读数**先归一到毫秒**：落盘的到期值在秒与毫秒之间漂过（Trae 的凭据是从 CPA 的
+ * auth 文件与手工粘贴进来的，那里是 10 位秒；别家与上游刷新响应都是 13 位毫秒）。
+ * 不归一的后果不是"少一位小数"而是整条账号被判死：`1791009732` 当毫秒读是
+ * 1970-01-21，有效期那列直接显示「已过期」。1e11 这个分界与后端
+ * `providers::trae::Credential::expires_at_ms` **同一个口径**（1e11 秒 ≈ 公元 5138
+ * 年，真正的毫秒时间戳不可能小于它），两处都写各自的理由，改数值时要一起改。
  */
+function expiryMillis(value: unknown): number {
+  const raw = Number(value) || 0
+  if (raw <= 0) return 0
+  return raw < 1e11 ? raw * 1000 : raw
+}
+
 export function ExpiryCell({ account }: { account: AccountRecord }) {
   const features = providerFeatures(providerOf(account))
-  const expiresAt = Number(features.edition ? account.expiresAt : account[features.expiry]) || 0
+  const expiresAt = expiryMillis(features.edition ? account.expiresAt : account[features.expiry])
   if (!expiresAt) return <span className='muted' title='记录里没有过期时间'>—</span>
   const left = expiresAt - Date.now()
   if (left <= 0) return <Badge variant='destructive' shape='tag' title='凭证已过期，转发时会先刷新'>已过期</Badge>
