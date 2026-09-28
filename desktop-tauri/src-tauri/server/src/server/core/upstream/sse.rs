@@ -98,6 +98,23 @@ impl FramePolicy {
     pub fn with_rewrite(rewrite: Option<ModelRewrite>) -> Self {
         Self { rewrite, strip_newline_chunks: false }
     }
+
+    /// 由**能力位 × 全局开关**装配（转发链上唯一的生产入口，见
+    /// `provider_loop::frame_policy_of`）。
+    ///
+    /// 两者的**顺序**是有意的：能力位在前、开关在后 ⇒ 这个开关只能**收窄**
+    /// （关掉它，一家本来就声明了能力位的提供商退回逐字节透传），不能**扩张**
+    /// （开了它，也不会替一家没实测过的上游凭空开始丢帧）。反过来的话，
+    /// 「改一个部署参数」就能动到任意一家的下发字节 —— 那正是本仓拒绝的形态：
+    /// 丢帧的依据只覆盖实测过的 WorkBuddy / AutoClaw 两家（见模块头），
+    /// 而部署参数是谁都能设的。
+    ///
+    /// 默认关（`config::KEY_STRIP_NEWLINE_KEEPALIVE`）：开着才会吃掉模型真·
+    /// 单独成片的那个换行 —— 少一个换行的外观损失换掉整屏断句，值不值由用户判，
+    /// 所以判权留在面板 / 环境变量上，而不是编译期替他决定。
+    pub fn assembled(rewrite: Option<ModelRewrite>, declared: bool, switch_on: bool) -> Self {
+        Self { rewrite, strip_newline_chunks: declared && switch_on }
+    }
 }
 
 /// 这一帧是不是「整片只有换行」的保活分片（判据全部是**宁可不丢**的方向）。
@@ -655,5 +672,52 @@ mod tests {
         assert!(!is_newline_keepalive(&json!({"choices": [{"delta": {"content": "\n", "function_call": {"name": "x"}}}]})));
         assert!(!is_newline_keepalive(&Value::Null));
         assert!(!is_newline_keepalive(&json!("")));
+    }
+
+    /// 装配规则本身：**能力位 × 开关**，两位都真才丢。
+    ///
+    /// 三条断言各自对应一个会被搞反的方向 ——
+    ///   - `declared=false, switch=true` ⇒ 不丢：开关只能收窄不能扩张，
+    ///     否则"改一个部署参数"就会动到一家没实测过的上游的下发字节；
+    ///   - `declared=true, switch=false` ⇒ 不丢：默认态（也是关掉时的态），
+    ///     见下面那条端到端字节对照；
+    ///   - 两位都真 ⇒ 丢。
+    #[test]
+    fn the_strip_needs_both_the_capability_bit_and_the_switch() {
+        let rewrite = Some(ModelRewrite { requested: "m".to_string() });
+        assert!(
+            !FramePolicy::assembled(rewrite.clone(), false, true).strip_newline_chunks,
+            "开关不能替一家没声明能力位的提供商开始丢帧"
+        );
+        assert!(
+            !FramePolicy::assembled(rewrite.clone(), true, false).strip_newline_chunks,
+            "开关关着时，声明了能力位的那两家也不动字节"
+        );
+        assert!(FramePolicy::assembled(rewrite.clone(), true, true).strip_newline_chunks);
+        // 开关只管丢弃那一项，model 回写不受它影响（两者是两回事）
+        let policy = FramePolicy::assembled(rewrite, true, false);
+        assert_eq!(policy.rewrite.map(|value| value.requested).as_deref(), Some("m"));
+    }
+
+    /// 端到端一条：**能力位开着、开关关着**时，那条生产脏流要逐字节原样出去。
+    ///
+    /// 这条是"默认零影响"的证据，不是上面那条纯函数的重复：它走的是真实状态机
+    /// （`ReasoningCoalescer::push`），万一将来丢弃动作被挪到别处（比如挪到
+    /// reasoning 累积之前），纯函数的断言还会绿，而这条会红。
+    #[test]
+    fn a_capable_provider_with_the_switch_off_still_streams_byte_identical_frames() {
+        let stream: String = CAPTURED.iter().map(|line| format!("{line}\n\n")).collect();
+        let declared_but_switched_off =
+            FramePolicy::assembled(None, true, false).strip_newline_chunks;
+        let mut coalescer = ReasoningCoalescer::new().with_policy(FramePolicy {
+            rewrite: None,
+            strip_newline_chunks: declared_but_switched_off,
+        });
+        let out: String = coalescer
+            .push(stream.as_bytes())
+            .iter()
+            .map(|frame| String::from_utf8_lossy(frame).to_string())
+            .collect();
+        assert_eq!(out, stream, "开关关着时七帧要一字不动地出去");
     }
 }
