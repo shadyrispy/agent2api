@@ -237,6 +237,11 @@ impl AccountStore {
             // 完全一致，差别只在推理域名与领取时的上游 provider 取值（那是转发
             // 与领取层的事，公开形态只用 `edition` 把地区标出来供界面显示）
             self.to_zcode_public_account(record)
+        } else if record.provider() == super::TRAE_PROVIDER_ID {
+            // Trae 只有一家（国内 SOLO）：国际版是**另一套协议**而不是一个地区，
+            // 所以这里没有 `is_trae_family` —— 将来接国际版时另立 kind、
+            // 另开一个分支，不要往本家的记录上挂 `region` 字段。
+            self.to_trae_public_account(record)
         } else if record
             .provider()
             .starts_with(crate::server::core::custom_providers::ID_PREFIX)

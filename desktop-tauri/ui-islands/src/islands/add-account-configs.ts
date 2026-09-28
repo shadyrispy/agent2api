@@ -430,6 +430,67 @@ const CODEARTS: ProviderConfig = {
 }
 
 /** 内置家的表单块，顺序与旧 ADD_FORMS 一致（只影响 DOM 里的块顺序，不影响界面） */
+/**
+ * Trae（字节 AI IDE 的 SOLO 通道）。
+ *
+ * ── 为什么只有一张卡、没有「地区」下拉 ──────────────────────
+ * AutoClaw / Accio / ZCode 的两地是**同一套协议换域名**，所以按地区参数化。
+ * Trae 不是：国内 SOLO 走 `trae-api-cn.mchost.guru` 的 `llm_utils_chat`
+ * （自定义信封 + 一套自己的 SSE 方言），国际版走 `chat_sessions` → `events`
+ * 两步握手、另一个 Origin、流是累积式要还原增量 —— 那是**两套协议**而不是一个
+ * 地区的两种拼法。把 `region` 做成这一家的字段，等于让"用哪套协议解释这个账号"
+ * 变成账号属性（本仓反复拒绝的那类坑）。国际版将来接入时另立 provider id。
+ *
+ * ── 为什么回调必须落在本机 ────────────────────────────────
+ * 上游对回调地址是**逐字正则校验**的（`^http://127.0.0.1:<port>/authorize$`），
+ * 且回调里**没有 state** —— 一轮登录只能靠端口认回来。所以浏览器必须与网关同机；
+ * 容器 / 远程部署形态收不到回调，只能在有浏览器的机器上登录后走粘贴那条路。
+ */
+const TRAE: ProviderConfig = {
+  provider: 'trae',
+  label: 'Trae',
+  // Trae 桌面端的登录态在它自己的加密存储里（与 Accio / ZCode 同一处境），
+  // 没有 auth.json 那种稳定可读的形态 —— 给了入口只会稳定失败。
+  desktop: false,
+  webLogin: {
+    noteHtml: '打开 <b>Trae SOLO</b> 的官方授权页（<code>trae.cn</code>）并用你的 Trae 账号登录：'
+      + '授权完成后官方页面会跳回<b>本机</b>的一个临时端口，网关自动用一次性授权码换取凭证并加入账号列表'
+      + '（授权码只在本机传给网关，界面不显示明文 token）。',
+    button: '打开 Trae 授权页',
+    busyText: '等待 Trae 授权完成…',
+    modes: [
+      {
+        value: 'embedded',
+        label: '内嵌窗口（推荐）',
+        hint: '将打开内嵌窗口；授权完成后自动加入账号列表。关掉窗口即取消等待。'
+          + '链接 5 分钟内有效，超时或未点就会作废（可重新发起）',
+      },
+      {
+        value: 'external',
+        label: '系统浏览器',
+        hint: '将用系统默认浏览器打开授权页（会复用浏览器里已登录的 Trae 账号）；'
+          + '完成后自动加入账号列表。<b>浏览器必须与网关在同一台机器上</b>'
+          + '（回调地址被上游钉成 127.0.0.1 的一个本机端口）',
+      },
+    ],
+  },
+  manualTitle: '填写凭证',
+  manualNoteHtml: 'accessToken 是 Trae 的 <code>Cloud-IDE-JWT</code>（三段点分），refreshToken 用于到期自动续期'
+    + '（本家 <b>refreshToken 一次一换</b>：换发一次旧的即作废，所以两份程序别同时刷同一个账号）。'
+    + '<br>手工粘贴时请连 <b>machineId / deviceId</b> 一起填：上游把它们与登录时上传的设备公钥绑在一起判设备，'
+    + '凭空换一对会撞 <code>2xxxx</code> 那族设备绑定拒绝。'
+    + '<br>没有这三样时的正路是用上方的「网页登录」；容器 / 远程部署形态本机收不到回调，'
+    + '只能在有浏览器的机器上登录后把凭据粘进来。',
+  fields: [
+    { key: 'accessToken', label: 'accessToken', rows: 3, placeholder: 'Cloud-IDE-JWT（三段点分）' },
+    { key: 'refreshToken', label: 'refreshToken', rows: 2, optional: true, placeholder: '可选；填了才能到期自动续期' },
+    { key: 'uid', label: '用户 ID', optional: true, placeholder: '可选；用于去重与展示名（留空时网关会问一次上游）' },
+    { key: 'machineId', label: 'machineId', optional: true, placeholder: '可选；UUID 形态，与凭据同生共死' },
+    { key: 'deviceId', label: 'deviceId', optional: true, placeholder: '可选；纯数字串（上游只收 8–24 位数字）' },
+    { key: 'name', label: '备注名', optional: true, placeholder: '可选，留空自动用昵称' },
+  ],
+}
+
 export const BUILTIN_CONFIGS: ProviderConfig[] = [
   RACCOON,
   CATPAW,
@@ -448,6 +509,7 @@ export const BUILTIN_CONFIGS: ProviderConfig[] = [
   // CodeArts（华为云 AI 代码助手）：一家一个 provider，没有地区/额度池之分
   // （region 写死 cn-north-4，与 token 签发地必须一致）。
   CODEARTS,
+  TRAE,
 ]
 
 /** WorkBuddy 的块 id（结构特殊，单独一个组件） */

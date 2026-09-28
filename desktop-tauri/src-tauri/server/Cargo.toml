@@ -81,8 +81,14 @@ bcrypt = "0.15"
 # CodeArts 的 DPoP proof（providers/codearts/dpop.rs）：ES256 的 JWS，每次令牌
 # 请求现签一份。ECDSA 要点乘 + RFC6979 确定性 k + DER，私钥运算手写出错的代价
 # 不对称 —— 与 qoder 那个"一次模幂"（num-bigint 手写）不是一个量级，所以用现成
-# crate。只开 ecdsa 特性（默认特性会拉进 pem/arithmetic 之外的无关东西）。
-p256 = { version = "0.14.0", default-features = false, features = ["ecdsa"] }
+# crate。这一条依赖有**两个**消费者：CodeArts 的 dpop.rs 与 Trae 登录的设备密钥对
+# （providers/trae/oauth.rs —— 官方客户端每次登录生成一套 EC P-256，要把 SPKI 公钥
+# PEM 塞进 ExchangeToken 的 DeviceInfo.DevicePublicKey，空值会被上游判成 HTTP 401 /
+# 业务码 20405（设备绑定，2026-09-04 实测），私钥按 PKCS#8 落盘）⇒ 特性取两家并集。
+# 且**不关默认特性**：0.14 把 to_pkcs8_der / to_public_key_der 这类 DER 导出挂在
+# 默认特性链上，照 CodeArts 原样 `default-features = false` 会让 trae 的 device.rs
+# 报 E0599（合并时实测）。
+p256 = { version = "0.14.0", features = ["ecdsa", "pem", "pkcs8"] }
 
 # AutoClaw 凭证解密的 DPAPI（providers/autoclaw/crypto.rs）。仅 Windows
 # 目标生效；其它平台该适配器的「导入桌面端登录态」是桩实现。

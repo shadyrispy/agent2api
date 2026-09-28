@@ -105,6 +105,7 @@ pub mod store_batch;
 pub mod store_crud;
 pub mod store_util;
 pub mod store_view;
+pub mod trae_accounts;
 pub mod zcode_accounts;
 
 pub use store::{AccountStore, AccountStoreError};
@@ -155,6 +156,11 @@ pub(crate) const AUTOCLAW_INTL_PROVIDER_ID: &str = crate::server::core::provider
 /// Qoder provider id（账号存储内部多处要用；**从注册表推导**，同
 /// [`RACCOON_PROVIDER_ID`] 的口径）。Qoder 的账号形态与推理转发见
 /// `qoder_accounts.rs` 与 `providers::qoder` 的模块头。
+/// Trae provider id（账号存储内部多处要用；**从注册表推导**，同
+/// [`QODER_PROVIDER_ID`] 的口径）。账号形态见 `trae_accounts.rs`。
+pub(crate) const TRAE_PROVIDER_ID: &str =
+    crate::server::core::providers::kind_id(crate::server::core::providers::ProviderKind::Trae);
+
 pub(crate) const QODER_PROVIDER_ID: &str = crate::server::core::providers::kind_id(
     crate::server::core::providers::ProviderKind::Qoder,
 );

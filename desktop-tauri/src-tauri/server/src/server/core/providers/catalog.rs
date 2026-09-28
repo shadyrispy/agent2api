@@ -106,6 +106,13 @@ pub(crate) fn refresh_meta(kind: ProviderKind) -> (bool, i64) {
         // 这里如实回 `(false, 0)` 而不是编一个时间 —— 界面的「来源」列会显示成
         // 内置清单，与事实相符。
         ProviderKind::Zcode | ProviderKind::ZcodeIntl => (false, 0),
+        // Trae 只有一张表（SOLO 通道），刷过就是远程来源；没刷到时是**空清单**
+        // 而不是静态兜底 —— 目录由 `X-Ide-Version-Code` 决定给哪张表，抄成
+        // 常量就是把一个时间点的读数当契约（见 `trae::models` 模块头）。
+        ProviderKind::Trae => (
+            super::trae::models::remote_refreshed(),
+            super::trae::models::last_refreshed_at(),
+        ),
     }
 }
 

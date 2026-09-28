@@ -889,6 +889,7 @@ pub fn adapter_for(kind: ProviderKind) -> &'static dyn ProviderAdapter {
         // 见 `zcode::adapter` 与 `zcode::region` 的模块头）
         ProviderKind::Zcode => &super::zcode::adapter::ZCODE_ADAPTER,
         ProviderKind::ZcodeIntl => &super::zcode::adapter::ZCODE_INTL_ADAPTER,
+        ProviderKind::Trae => &super::trae::adapter::TRAE_ADAPTER,
     }
 }
 
@@ -946,6 +947,11 @@ pub fn implemented_kinds() -> Vec<ProviderKind> {
         // 注意 `supports_chat()` 目前为 false（转发入口尚未接线，见
         // `codearts/mod.rs`），所以"接线了"指的是目录/账号这两条能跑。
         ProviderKind::CodeArts,
+        // Trae 已接真身（登录 / 凭据 / 目录 / 转发），并且**真有**远程目录
+        // （`supports_model_refresh()` 为 true），所以它必须在本列表里 ——
+        // 不在的话刷新循环根本不会问它，症状是"界面上点了刷新、日志里
+        // 一句 trae 都没有"（与"刷了但没取到"是两种完全不同的故障）。
+        ProviderKind::Trae,
     ]
 }
 

@@ -516,6 +516,46 @@ pub async fn add_account(state: &ServerState, body: &Bytes) -> Response {
             };
             store.add_zcode_account(&credentials, import_name, "manual")
         }
+        // Trae：**粘贴凭据**（`accessToken` / `refreshToken` / 设备三件套）→ 手动添加。
+        // 「网页登录」是另一条链路（`api::session::login_start` 的 Trae 分支 →
+        // `core::login::trae` 的回调任务 → 同一个落账号入口 `add_trae_account`）。
+        //
+        // ── 形状判定为什么交给 `Credential::from_payload` ────────
+        // 参考实现的落盘形态是嵌套的 `{type, provider, auth{…}, account{…}}`
+        // （CPA 的凭据文件），而手填表单是平铺的。两个位置都读一次是必须的：
+        // 只认平铺会让「从 CPA 导出粘贴过来」变成一句"缺 accessToken"，而那份
+        // 数据明明是完整的。它同时**拒绝**别家的蛇形键（`access_key_id` 一类），
+        // 免得一条有内容的记录被当成空凭据收下。
+        //
+        // `importDesktop` 不提供：Trae 桌面端的登录态在它自己的加密存储里
+        // （与 Accio / ZCode 同一处境），给了入口只会稳定失败。
+        Some(crate::server::core::providers::ProviderKind::Trae) => {
+            if import_desktop {
+                return management_error(
+                    400,
+                    "Trae 不支持导入桌面端登录态，请用「网页登录」或粘贴凭证添加账号",
+                );
+            }
+            let mut credential =
+                match crate::server::core::providers::trae::credentials::Credential::from_payload(&payload) {
+                    Ok(credential) => credential,
+                    Err(reason) => return management_error(400, reason),
+                };
+            // 身份是 best-effort 的读数（昵称/uid 只影响显示与去重）：
+            // 粘贴的凭据一般不带 uid，这里替用户问一次上游。问不到也照样落账号
+            // —— 见 `providers::trae::profile` 模块头，「登录已成功却因为读不到
+            // 昵称而判失败」是本家明确要避免的那种行为。
+            if credential.uid.is_empty() {
+                if let Ok(identity) =
+                    crate::server::core::providers::trae::profile::get_user_info(&credential, None).await
+                {
+                    credential.uid = identity.uid;
+                    credential.nickname = identity.nickname;
+                    credential.enterprise_id = identity.enterprise_id;
+                }
+            }
+            store.add_trae_account(&credential, import_name, "manual")
+        }
         Some(crate::server::core::providers::ProviderKind::WorkBuddy) | None => {
             store.add_account(&payload, None)
         }

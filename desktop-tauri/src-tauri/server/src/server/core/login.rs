@@ -32,6 +32,7 @@ mod autoclaw;
 mod catpaw;
 pub mod codearts;
 mod qoder;
+mod trae;
 mod zcode;
 
 use std::collections::HashMap;
@@ -254,6 +255,13 @@ pub struct LoginService {
     /// 生命周期与任务表一致（收尾时清掉）；进程重启后自然为空，那时回调
     /// 会被 `finish_autoclaw_oauth_callback` 判成「登录上下文已丢失」。
     autoclaw_oauth: Arc<Mutex<HashMap<String, autoclaw::PendingOauth>>>,
+    /// Trae 网页登录的额外状态（`state → 进行中的一轮`）。
+    ///
+    /// 单独一张表而不是塞进 `LoginTaskState`（同 [`Self::autoclaw_oauth`] 的理由）：
+    /// 它的值是**活对象**（持有本机回调监听器），既不能序列化给 `/wait`，
+    /// 也不该让别的 provider 每次轮询都陪着带一份别人用不到的东西。
+    /// 表里同一时刻最多一条（见 `login/trae.rs` 模块头）。
+    trae_login: Arc<Mutex<HashMap<String, Arc<crate::server::core::providers::trae::login::Session>>>>,
 }
 
 impl LoginService {
@@ -263,11 +271,17 @@ impl LoginService {
             store,
             tasks: LoginTasks::new(),
             autoclaw_oauth: Arc::new(Mutex::new(HashMap::new())),
+            trae_login: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     pub fn tasks(&self) -> &LoginTasks {
         &self.tasks
+    }
+
+    /// Trae 登录的待办表（`login/trae.rs` 用它挂这一轮的回调监听器）。
+    pub(crate) fn trae_login(&self) -> &Arc<Mutex<HashMap<String, Arc<crate::server::core::providers::trae::login::Session>>>> {
+        &self.trae_login
     }
 
     /// 取消一次登录：任务表那一步见 [`LoginTasks::cancel`]，这里多做的事是
@@ -292,6 +306,13 @@ impl LoginService {
             // CodeArts 那一轮的 PKCE verifier / DPoP 私钥在自己的待办表里，
             // 不清就要占到 5 分钟超时才还 —— 而用户取消后往往立刻重试。
             self.drop_codearts_pending(state);
+            // Trae 这一家的待办表按 state 存，但取消语义是"这一轮不要了"：
+            // 本家同时只有一轮，直接整体收摊（close 释放回调端口，正在等回调的
+            // 后台任务随之退出）。不这么做就要把端口占到 5 分钟超时才还 ——
+            // 与 AutoClaw 那次「取消后立刻重试抢不到端口」是同一个坑。
+            if state.starts_with("trae-") {
+                self.close_trae_login();
+            }
         }
         canceled
     }

@@ -246,6 +246,35 @@ pub async fn login_start(State(state): State<ServerState>, body: Bytes) -> Respo
         return ok_json(json!({ "state": task_state, "authUrl": auth_url,
             "edition": task_edition, "provider": region.provider_id() }));
     }
+    // Trae：**网页登录 + 本机回调监听**（授权地址由本进程现造，见
+    // `core::login::trae`）。响应形状与另外几条登录链一致
+    // （`{state, authUrl, edition, provider}`），前端不需要新分支。
+    //
+    // ★ 这里的等待上限比通用的 `AUTH_URL_WAIT_MS`（15s）**长**一档：地址要先
+    // 问一次 GetLoginGuidance，而那是「三个候选各 5 秒」的轮询 —— 上游不通时
+    // 恰好是 15 秒，用通用值会让"地址其实造出来了"的那一次被响应侧的超时
+    // 判成失败（后台任务还在跑，界面却已经报错了，是最难复现的一类分歧）。
+    // guidance 全挂时本家会兜到默认登录 host（参考实现同一条），所以这段
+    // 等待的最坏情况是"上游不通"而不是"永远等不到"。
+    if kind == crate::server::core::providers::ProviderKind::Trae {
+        let handle = match state.login().start_trae_login() {
+            Ok(handle) => handle,
+            Err(error) => return management_error(400, error),
+        };
+        let (task_state, auth_url, task_edition) = match state
+            .login()
+            .wait_for_auth_url(&handle, Duration::from_millis(20_000))
+            .await
+        {
+            Ok(values) => values,
+            Err(error) => {
+                logging::log("[Login]", &format!("❌ 发起 Trae 登录失败: {error}"));
+                return management_error(502, error);
+            }
+        };
+        return ok_json(json!({ "state": task_state, "authUrl": auth_url,
+            "edition": task_edition, "provider": "trae" }));
+    }
     // Cline：**设备授权登录**（WorkOS RFC 8628）。形态上介于「网页登录」与
     // 「Qoder 设备授权」之间：同步问上游要 user_code 与授权页地址（一次 POST），
     // 把地址交给界面打开；用户确认后由后台任务轮询换令牌。

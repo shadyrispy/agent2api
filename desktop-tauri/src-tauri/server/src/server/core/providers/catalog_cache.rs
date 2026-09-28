@@ -85,6 +85,8 @@ pub const SCOPE_ACCIO_GLOBAL: &str = "accioGlobal";
 pub const SCOPE_ACCIO_CN: &str = "accioCn";
 /// CodeArts（华为云 snap-access；三源合并成一份清单，所以一个 scope）
 pub const SCOPE_CODEARTS: &str = "codearts";
+/// Trae SOLO（`/api/ide/v1/get_detail_param`）
+pub const SCOPE_TRAE: &str = "trae";
 
 /// 全部 scope（事实来源：`cached_scopes` 按它遍历；新增一家时加在这里）。
 pub const ALL_SCOPES: &[&str] = &[
@@ -99,6 +101,7 @@ pub const ALL_SCOPES: &[&str] = &[
     SCOPE_ACCIO_GLOBAL,
     SCOPE_ACCIO_CN,
     SCOPE_CODEARTS,
+    SCOPE_TRAE,
 ];
 
 /// 一份清单缓存

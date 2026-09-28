@@ -183,6 +183,18 @@ pub(super) fn identity_of_item(provider: &str, item: &Map<String, Value>) -> Res
         };
         return Ok(format!("{region}:{user_id}"));
     }
+    // Trae：账号标识是 `uid`（与 workbuddy / catpaw 同类，落在 uid 而不是 userId），
+    // 且判重口径是 **(variant, uid) 两段** —— 见 `trae_accounts::add_trae_account`：
+    // 同一个人可以在 solo 与 cn 两个谱系各有一条记录，只按 uid 会把两条并成一条。
+    // 少了这一支的话，本家账号导得出去、导不回来（落到下面的 userId 兜底，
+    // 报「缺少 userId（无法标识 trae 账号）」整条失败）。
+    if provider == kind_id(ProviderKind::Trae) {
+        if uid.is_empty() {
+            return Err("缺少 uid（无法标识 Trae 账号）".to_string());
+        }
+        let variant = text("variant");
+        return Ok(format!("{}:{uid}", if variant.is_empty() { "solo" } else { &variant }));
+    }
     // 自定义提供商：凭证就是身份 —— apiKey 非空时与添加路径「同 key 合并」
     // 完全同口径（添加路径的账号 id 就是 key 的 SHA-256 前缀）；空 key 没有
     // 稳定标识，退到账号 id（空 key 的记录 id 是随机的，但全局唯一仍然成立）。
@@ -221,6 +233,21 @@ pub(super) fn identity_of_record(provider: &str, record: &StoredAccount) -> Opti
             return Some(uid);
         }
         return (!login_name.is_empty()).then_some(login_name);
+    }
+    // Trae：`uid` + variant 两段身份（与 `identity_of_item` 同口径 —— 两处
+    // 缺省都必须按 `solo` 算，否则导出去的同一条账号会在判重时对不上）。
+    if provider == kind_id(ProviderKind::Trae) {
+        let uid = record.uid().trim().to_string();
+        if uid.is_empty() {
+            return None;
+        }
+        let variant = record
+            .get("variant")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        return Some(format!("{}:{uid}", if variant.is_empty() { "solo" } else { &variant }));
     }
     // Cline：身份在 `account` 键上（与 `identity_of_item` 同一口径，两池共用）
     if crate::server::core::account_store::is_cline_family(provider) {
@@ -318,4 +345,44 @@ pub(super) fn allocate_priority(used: &[i64]) -> Option<i64> {
         return Some(candidate);
     }
     (MIN_PRIORITY..=MAX_PRIORITY).find(|value| !normalized.contains(value))
+}
+
+#[cfg(test)]
+mod tests {
+    //! 这里只测**身份判定**本身（导入/导出两段的口径是否一致），不测整条导入链
+    //! —— 后者要临时库与账号文件，`api::accounts` 那侧已有覆盖。
+    use serde_json::json;
+
+    use super::*;
+
+    fn item(fields: serde_json::Value) -> Map<String, Value> {
+        fields.as_object().expect("对象").clone()
+    }
+
+    #[test]
+    fn trae_identity_is_variant_plus_uid_and_never_falls_through_to_userid() {
+        // 回归本家那条"导得出去、导不回来"：兜底按 `userId` 取身份，
+        // 而 Trae 的记录只有 `uid`（与 workbuddy / catpaw 同类）。落进兜底的
+        // 症状是导入时报「缺少 userId（无法标识 trae 账号）」整条失败。
+        assert_eq!(
+            "solo:51029416092912",
+            identity_of_item(
+                "trae",
+                &item(json!({"uid": "51029416092912", "variant": "solo", "userId": ""}))
+            )
+            .expect("应识别出身份")
+        );
+        assert_eq!(
+            "cn:51029416092912",
+            identity_of_item("trae", &item(json!({"uid": "51029416092912", "variant": "cn"}))).expect("应识别出身份"),
+            "两个谱系是同一个人也是两条记录（与 add_trae_account 的判重口径一致）"
+        );
+        // variant 缺失时**必须**与 `identity_of_record` 的缺省同一个值，
+        // 否则同一条账号在导出侧与本机侧算出两个身份，判重失效 → 重复添加。
+        assert_eq!(
+            "solo:777",
+            identity_of_item("trae", &item(json!({"uid": "777"}))).expect("缺 variant 按 solo"),
+        );
+        assert!(identity_of_item("trae", &item(json!({"uid": "  ", "userId": "51029416092912"}))).is_err(), "空 uid 不能拿 userId 凑");
+    }
 }

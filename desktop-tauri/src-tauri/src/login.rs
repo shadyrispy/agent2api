@@ -258,8 +258,12 @@ fn allowed_hosts(provider: &str) -> Option<&'static [&'static str]> {
         // `providers::codearts::oauth::authorize_url`）。那条 loopback 导航一旦被
         // 白名单拦下，症状就是上面警告过的那种：用户在官方页面明明登录成功，
         // 网关却永远等不到码。
+        //
+        // Trae 必须显式列在这里：落进默认分支会拿到 WorkBuddy 的白名单，
+        // 那张表**既没有** `trae.cn`（授权页）**也没有** `127.0.0.1`（回调），
+        // 症状正是本文件上面警告的那种 —— 窗口一片空白，日志什么也看不出。
         "catpaw" | "qoder" | "cline-free" | "cline-pass" | "autoclaw" | "autoclaw-intl"
-        | "accio" | "accio-cn" | "zcode" | "zcode-intl" | "codearts" => None,
+        | "accio" | "accio-cn" | "zcode" | "zcode-intl" | "codearts" | "trae" => None,
         _ => Some(WORKBUDDY_ALLOWED_HOSTS),
     }
 }
@@ -418,6 +422,12 @@ fn normalize_provider(provider: &str) -> Result<&'static str, String> {
         // 上打不开，也**不影响**登录判定。
         "zcode" => Ok("zcode"),
         "zcode-intl" => Ok("zcode-intl"),
+        // Trae（SOLO CN）：授权地址由**后端**问上游 guidance 拼（PKCE + 回调 URL），
+        // 壳侧只负责开窗口与轮询 —— 与 ZCode 同一条路。特别地，它的回调落在
+        // `http://127.0.0.1:<随机端口>/authorize`（网关自己监听的那台 loopback，
+        // 上游把这个地址按正则逐字校验），所以窗口**必须允许**导航到本机端口，
+        // 否则用户点完授权、回调请求根本发不出去（见下面 allowed_hosts 的同一条）。
+        "trae" => Ok("trae"),
         other => Err(format!("不支持网页登录的提供商：{other}")),
     }
 }
@@ -702,6 +712,9 @@ pub async fn start(
         // 要跳过 edition 后缀，否则会得到「登录 ZCode 国内版 国内版账号」
         "zcode" => "ZCode 国内版",
         "zcode-intl" => "ZCode 国际版",
+        // Trae 只有一家（国内 SOLO 通道；国际版是另一套协议、另立 provider id），
+        // 品牌名里不需要地区
+        "trae" => "Trae",
         _ => "WorkBuddy",
     };
     // 窗口标题：Cline 两家的池、ZCode 两家的地区都已经在品牌名里，
@@ -709,7 +722,7 @@ pub async fn start(
     // 「登录 ZCode 国内版 国内版账号」这种说不通的标题）
     let title = if matches!(
         provider,
-        "cline-free" | "cline-pass" | "zcode" | "zcode-intl"
+        "cline-free" | "cline-pass" | "zcode" | "zcode-intl" | "trae"
     ) {
         format!("登录 {provider_label} 账号")
     } else {

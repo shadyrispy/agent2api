@@ -254,3 +254,54 @@ fn apply_pragmas(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|error| format!("设置数据库 PRAGMA 失败: {error}"))
 }
+
+/// 测试专用：会**自己删文件**的临时库。
+///
+/// 为什么不是"打开前 `remove_file`"就完事：那只保证"不复用旧数据",不保证
+/// "不留垃圾"。文件名带进程 id,每轮 `cargo test` 都是一批新 pid —— Trae 一家
+/// 就这么在 `$TMPDIR` 里留下过 401 个文件、一百多 MB。所以清理必须挂在
+/// 拥有者的 `Drop` 上,调用点要把守卫**留在作用域里**(`let (store, _db) = …`),
+/// 而不是只拿那个 `Db`。
+///
+/// 测试中途 panic 也会走 drop(测试跑的是 unwind profile,`panic=abort`
+/// 只作用于生产构建),所以不需要显式 cleanup 调用。
+#[cfg(test)]
+pub(crate) mod test_temp {
+    use std::path::{Path, PathBuf};
+
+    use super::Db;
+
+    pub struct TempDb {
+        path: PathBuf,
+    }
+
+    impl TempDb {
+        /// 建一个带标签的临时库。第二个返回值是删文件的守卫,**必须由调用方
+        /// 持有到用例结束**(丢掉就等于回到"留一堆垃圾"的老行为)。
+        pub fn open(label: &str) -> (Db, TempDb) {
+            let safe: String = label
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c.to_ascii_lowercase() } else { '-' })
+                .collect();
+            let path = std::env::temp_dir().join(format!("agent2api-test-{safe}-{}.db", std::process::id()));
+            let _ = std::fs::remove_file(&path);
+            let db = Db::open(&path)
+                .unwrap_or_else(|error| panic!("临时库打不开（{}）：{error}", path.display()));
+            (db, TempDb { path })
+        }
+
+        #[allow(dead_code)]
+        pub fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDb {
+        fn drop(&mut self) {
+            // WAL / SHM 也要清:只删主文件会把它们留在原地。
+            for suffix in ["", "-wal", "-shm"] {
+                let _ = std::fs::remove_file(format!("{}{}", self.path.display(), suffix));
+            }
+        }
+    }
+}
