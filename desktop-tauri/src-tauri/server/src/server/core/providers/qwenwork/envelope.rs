@@ -17,10 +17,19 @@
 //! 会被服务端 400。本网关的信封里 `parameters` 只带温度 / 采样 / 长度四项，
 //! `reasoning_effort` **不下发**（等价于默认档），所以不需要改写也不必报错。
 //!
-//! ── 图片 ────────────────────────────────────────────────────
-//! 参考实现不支持图片输入（`is_vl` 标志存在但未实现），本家如实**拒绝**带图
-//! 请求（400 明确文案），而不是把图片帧悄悄丢掉 —— 后者会让模型答得头头是道
-//! 却完全没看图，是最坏的一种假成功。
+//! ── 图片（2026-10-20 实测通过）──────────────────────────────
+//! 目录里三个模型都是 `is_vl: true`；图片走 **OpenAI 多模态 content 数组**
+//! （`[{type:"text"},{type:"image_url",image_url:{url:"data:image/png;base64,…"}}]`）
+//! **原样进 messages** 即可，上游会真的看图：
+//!   · 上红下蓝的 64×64 图 → flash 答「红、蓝」，pro 答「红色、蓝色」；
+//!   · 全绿图同一问题 → 答「绿色」（对照，排除猜色）；
+//!   · usage 里出现 `image_tokens: 66` —— 图片确实进了计量。
+//!
+//! ⚠️ 另一种写法 `chat_context.imageUrls = [...]` **不生效**：模型回「当前对话
+//! 中没有上传图片」。所以图片只能走 messages 的 content 数组。
+//!
+//! 非图片/文本的段（音频、文件）仍然**明确拒绝**（400）：上游没有验证过的
+//! 上行路径，悄悄丢掉会让模型答得头头是道却完全没看内容 —— 最坏的一种假成功。
 //!
 //! ── 硬约束 ──────────────────────────────────────────────────
 //! release 是 `panic=abort`：本文件零 unwrap/expect/panic。
@@ -196,10 +205,11 @@ pub fn build_body(
     Ok(Value::Object(envelope))
 }
 
-/// 消息归一：内容数组（OpenAI 多模态形态）只接受纯文本段。
+/// 消息归一：文本数组折叠成字符串；**含图片段时原样保留数组**。
 ///
-/// 带 `image_url` / `input_image` 的直接 400 —— 本通道没有图片上行路径，
-/// 悄悄丢掉会让客户端以为模型看过图。
+/// 上游只认 OpenAI 多模态形状（`type:"image_url"` + `image_url.url`），
+/// 且必须是 data URL 或它可取的 URL（实测 data URL 可用）。非文本/图片的段
+/// （音频、文件）明确 400 —— 详见模块头。
 fn normalize_messages(messages: Vec<Value>) -> Result<Vec<Value>, GatewayError> {
     let mut out = Vec::with_capacity(messages.len());
     for message in messages {
@@ -210,7 +220,7 @@ fn normalize_messages(messages: Vec<Value>) -> Result<Vec<Value>, GatewayError> 
             None => Value::Null,
             Some(Value::String(text)) => Value::String(text.clone()),
             Some(Value::Null) => Value::Null,
-            Some(Value::Array(parts)) => Value::String(join_text_parts(parts)?),
+            Some(Value::Array(parts)) => normalize_parts(parts)?,
             Some(other) => Value::String(content_text(other)),
         };
         let mut normalized = entry.clone();
@@ -220,9 +230,10 @@ fn normalize_messages(messages: Vec<Value>) -> Result<Vec<Value>, GatewayError> 
     Ok(out)
 }
 
-/// 文本段拼接；遇到图片段报错（见 [`normalize_messages`]）。
-fn join_text_parts(parts: &[Value]) -> Result<String, GatewayError> {
+/// 内容数组：全文本 → 折叠成字符串（与参考实现一致）；含图片 → 原样保留数组。
+fn normalize_parts(parts: &[Value]) -> Result<Value, GatewayError> {
     let mut texts = Vec::new();
+    let mut has_image = false;
     for part in parts {
         match part.get("type").and_then(Value::as_str) {
             Some("text") => {
@@ -238,16 +249,35 @@ fn join_text_parts(parts: &[Value]) -> Result<String, GatewayError> {
                     texts.push(text.to_string());
                 }
             }
-            // 图片 / 音频 / 文件：本通道没有上行路径
+            Some("image_url") => {
+                let url = part
+                    .get("image_url")
+                    .and_then(|image| image.get("url"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or("");
+                if url.is_empty() {
+                    return Err(GatewayError::with_status(
+                        400,
+                        "图片段缺少 image_url.url（data URL 或可访问的图片地址）",
+                    ));
+                }
+                has_image = true;
+            }
+            // 音频 / 文件 / 其它：本通道没有验证过的上行路径
             _ => {
                 return Err(GatewayError::with_status(
                     400,
-                    "千问办公通道暂不支持图片 / 音频输入（本家没有已验证的多模态上行路径）",
+                    "千问办公通道只支持文本与图片输入（音频 / 文件没有已验证的上行路径）",
                 ));
             }
         }
     }
-    Ok(texts.join("\n"))
+    if has_image {
+        // 上游按 OpenAI 多模态形状解析；原样保留（文本段 + 图片段）
+        return Ok(Value::Array(parts.to_vec()));
+    }
+    Ok(Value::String(texts.join("\n")))
 }
 
 /// 任意 JSON → 纯文本（字符串原样、数组按文本段拼接、其它序列化）
@@ -334,7 +364,7 @@ mod tests {
         assert_eq!(envelope["business"]["stage"], "processing");
         assert_eq!(envelope["chat_context"]["extra"]["modelConfig"]["key"], "pro");
         assert_eq!(envelope["model_config"]["key"], "pro");
-        assert_eq!(envelope["model_config"]["max_input_tokens"], 1024000);
+        assert_eq!(envelope["model_config"]["max_input_tokens"], 1_000_000);
         assert_eq!(envelope["stream"], true);
         assert_eq!(envelope["chat_context"]["imageUrls"], Value::Null);
     }
@@ -369,18 +399,50 @@ mod tests {
         assert!(envelope.get("tool_choice").is_none(), "没有工具就不带 tool_choice");
     }
 
+    /// 图片按 OpenAI 多模态形状**原样保留**（实测上游真的会看图）。
     #[test]
-    fn image_parts_are_rejected_not_silently_dropped() {
+    fn image_parts_are_preserved_in_messages() {
         let mut request = body();
         request["messages"] = json!([
             { "role": "user", "content": [
-                { "type": "text", "text": "what is this" },
+                { "type": "text", "text": "上半部分和下半部分分别是什么颜色" },
                 { "type": "image_url", "image_url": { "url": "data:image/png;base64,AA" } }
+            ] }
+        ]);
+        let envelope = build_body(&request, "flash", EnvelopeIds::fresh().expect("ids")).expect("body");
+        let messages = envelope["messages"].as_array().expect("messages");
+        let content = messages[0]["content"].as_array().expect("图片必须保留成数组");
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[1]["type"], "image_url");
+        assert_eq!(envelope["chat_context"]["text"], "上半部分和下半部分分别是什么颜色");
+    }
+
+    /// 纯文本的 content 数组仍然折叠成字符串（与参考实现同形）。
+    #[test]
+    fn text_only_parts_collapse_to_a_string() {
+        let mut request = body();
+        request["messages"] = json!([
+            { "role": "user", "content": [
+                { "type": "text", "text": "第一段" },
+                { "type": "text", "text": "第二段" }
+            ] }
+        ]);
+        let envelope = build_body(&request, "pro", EnvelopeIds::fresh().expect("ids")).expect("body");
+        assert_eq!(envelope["messages"][0]["content"], "第一段\n第二段");
+    }
+
+    /// 音频 / 文件仍然明确拒绝（不静默丢）。
+    #[test]
+    fn audio_parts_are_rejected() {
+        let mut request = body();
+        request["messages"] = json!([
+            { "role": "user", "content": [
+                { "type": "input_audio", "input_audio": { "data": "AAAA" } }
             ] }
         ]);
         let error = build_body(&request, "pro", EnvelopeIds::fresh().expect("ids")).expect_err("必须报错");
         assert_eq!(error.status_code, 400);
-        assert!(error.message.contains("暂不支持图片"));
+        assert!(error.message.contains("只支持文本与图片"));
     }
 
     #[test]

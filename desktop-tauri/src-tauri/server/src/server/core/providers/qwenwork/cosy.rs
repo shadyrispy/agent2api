@@ -55,6 +55,28 @@ pub fn build_chat_headers(
     identity: &QwenworkIdentity<'_>,
     model_key: &str,
 ) -> Result<Vec<(String, String)>, GatewayError> {
+    build_headers(body, request_url, identity, Some(model_key))
+}
+
+/// 构造一次**GET 类接口**（模型目录等）的签名头。
+///
+/// 上游的 `/api/v2/model/list` 也走 COSY 鉴权：裸 Bearer 实测回
+/// `403 {"code":"101","message":"Signature invalid"}`（不是没权限），
+/// 签名后同一个请求返回 200 与完整目录。GET 没有请求体（签名里 body 为空），
+/// 也不带 `x-model-key`（那是聊天专用）。
+pub fn build_api_headers(
+    request_url: &str,
+    identity: &QwenworkIdentity<'_>,
+) -> Result<Vec<(String, String)>, GatewayError> {
+    build_headers(&[], request_url, identity, None)
+}
+
+fn build_headers(
+    body: &[u8],
+    request_url: &str,
+    identity: &QwenworkIdentity<'_>,
+    model_key: Option<&str>,
+) -> Result<Vec<(String, String)>, GatewayError> {
     if identity.uid.is_empty() {
         return Err(GatewayError::with_status(
             400,
@@ -74,7 +96,7 @@ pub fn build_chat_headers(
     let sig_path = cosy::signature_path(request_url)?;
     let signature = session.signature(&payload, &date, body, &sig_path);
 
-    let headers: Vec<(String, String)> = vec![
+    let mut headers: Vec<(String, String)> = vec![
         ("cosy-data-policy".to_string(), "agree".to_string()),
         ("content-type".to_string(), "application/json".to_string()),
         ("cosy-clienttype".to_string(), constants::CLIENT_TYPE.to_string()),
@@ -82,7 +104,14 @@ pub fn build_chat_headers(
         ("cosy-user".to_string(), identity.uid.to_string()),
         ("cosy-key".to_string(), session.cosy_key),
         ("cache-control".to_string(), "no-cache".to_string()),
-        ("accept".to_string(), "text/event-stream".to_string()),
+        (
+            "accept".to_string(),
+            if model_key.is_some() {
+                "text/event-stream".to_string()
+            } else {
+                "application/json".to_string()
+            },
+        ),
         (
             "authorization".to_string(),
             cosy::compose_bearer(&payload, &signature),
@@ -100,10 +129,12 @@ pub fn build_chat_headers(
             "cosy-business-type".to_string(),
             constants::BUSINESS_TYPE.to_string(),
         ),
-        ("x-model-key".to_string(), model_key.to_string()),
-        ("x-model-source".to_string(), "system".to_string()),
         ("x-request-id".to_string(), session.request_id.clone()),
     ];
+    if let Some(model_key) = model_key {
+        headers.push(("x-model-key".to_string(), model_key.to_string()));
+        headers.push(("x-model-source".to_string(), "system".to_string()));
+    }
     Ok(headers)
 }
 

@@ -54,7 +54,7 @@ pub fn build_chat_request(
     };
 
     let ids = envelope::EnvelopeIds::fresh()?;
-    let payload = envelope::build_body(body, upstream_model, ids)?;
+    let payload = envelope::build_body(body, &upstream_model, ids)?;
     // 信封先序列化，再编码：签名覆盖的是编码后的那串字节
     let serialized = serde_json::to_string(&payload).map_err(|error| {
         GatewayError::with_status(500, format!("千问办公请求体序列化失败: {error}"))
@@ -67,7 +67,7 @@ pub fn build_chat_request(
         token: &credentials.access_token,
         machine_id: &credentials.machine_id,
     };
-    let headers = cosy::build_chat_headers(encoded.as_bytes(), &url, &identity, upstream_model)?;
+    let headers = cosy::build_chat_headers(encoded.as_bytes(), &url, &identity, &upstream_model)?;
 
     // `body` 放**编码前**的信封：调试报文与统计读它更可读；真正发出去的
     // 是 `raw_body`（见模块头）。
@@ -112,12 +112,25 @@ mod tests {
             .any(|(name, value)| name == "authorization" && value.starts_with("Bearer COSY.")));
     }
 
+    /// 认不出的名字（不带 `qwen/` 前缀）仍然硬错 —— 静默回落 auto 是最坏的
+    /// 一种「成功」。带前缀的名字按目录权威透传（上游新增模型不用改代码）。
     #[test]
-    fn unknown_model_is_a_hard_error() {
-        let body = json!({ "model": "qwen/does-not-exist", "messages": [] });
+    fn unknown_model_name_is_a_hard_error() {
+        let body = json!({ "model": "does-not-exist", "messages": [] });
         let error = build_chat_request(&session(), &body, &HeaderMap::new()).expect_err("必须报错");
         assert_eq!(error.status_code, 400);
         assert!(error.message.contains("没有模型"));
+    }
+
+    #[test]
+    fn prefixed_model_names_pass_through_to_upstream() {
+        let body = json!({ "model": "qwen/future-model", "messages": [] });
+        let plan = build_chat_request(&session(), &body, &HeaderMap::new()).expect("目录权威");
+        assert_eq!(plan.body["model_config"]["key"], "future-model");
+        assert!(plan
+            .headers
+            .iter()
+            .any(|(name, value)| name == "x-model-key" && value == "future-model"));
     }
 
     #[test]

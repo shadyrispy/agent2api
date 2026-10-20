@@ -182,7 +182,16 @@ impl ChatFromQwenworkStream {
             })
             .unwrap_or(0);
         if status >= 400 {
-            let message = envelope_message(outer);
+            let code = inner_code(outer);
+            let message = if code == Some(80411) {
+                // 实测：输入 ~987k token + 缺省 max_tokens 32k 超过 1M 时上游给
+                // 这个码，文案只有一句泛泛的 "Error in upstream response"。
+                // 换成能照着做的说明（上下文是「输入 + 输出」的合计预算）。
+                "请求超出千问办公的上下文上限（输入 + max_tokens 合计不能超过 1M；上游 80411）"
+                    .to_string()
+            } else {
+                envelope_message(outer)
+            };
             return self.fail_message(&message, "upstream_error", status);
         }
 
@@ -387,6 +396,22 @@ impl ChatFromQwenworkStream {
     }
 }
 
+/// 信封 `body` 里的业务码（`{"code":"80411",…}`）；没有就给 None
+fn inner_code(outer: &Value) -> Option<i64> {
+    let inner = match outer.get("body")? {
+        Value::String(text) => serde_json::from_str::<Value>(text).ok()?,
+        Value::Object(_) => outer.get("body").cloned()?,
+        _ => return None,
+    };
+    inner
+        .get("code")
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_str().and_then(|text| text.parse::<i64>().ok()))
+        })
+}
+
 /// 信封的错误文案：`body` 里的 `message` / `error`，其次是信封自身的 `message`
 fn envelope_message(outer: &Value) -> String {
     let from_body = outer.get("body").and_then(|body| match body {
@@ -496,6 +521,23 @@ mod tests {
         assert!(body.contains("\"total_tokens\":4"), "usage 由本机补发");
         assert!(!body.contains("raw_usage"));
         assert!(!body.contains("model_account"));
+    }
+
+    /// 80411 = 上下文超限；上游文案泛泛，翻译机换成可执行的说明。
+    #[test]
+    fn context_overflow_code_gets_an_actionable_message() {
+        let mut machine = ChatFromQwenworkStream::new("pro");
+        let line = format!(
+            "data:{}\n",
+            json!({
+                "statusCodeValue": 400,
+                "statusCode": "Bad Request",
+                "body": "{\"code\":\"80411\",\"message\":\"Error in upstream response\"}"
+            })
+        );
+        let body = text(&machine.push(line.as_bytes()));
+        assert!(body.contains("上下文上限"), "{body}");
+        assert!(body.contains("80411"));
     }
 
     #[test]

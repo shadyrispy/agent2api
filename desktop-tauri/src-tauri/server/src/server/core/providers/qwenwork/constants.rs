@@ -56,9 +56,17 @@ pub const MACHINE_OS: &str = "x86_64_win32";
 pub const LOGIN_VERSION: &str = "v2";
 pub const USER_AGENT: &str = "qoderwork/1.1.0";
 
-/// 上下文上限（实测：1250K 汉字 ≈ 1,022,745 token 通过；1262K 起 502，
-/// 不是截断而是整轮失败 —— 见参考实现 `chat.js` 的注释）
-pub const MAX_INPUT_TOKENS: i64 = 1_024_000;
+/// 上下文上限：目录（签名后可读）声明 `max_input_tokens=1000000`，并有
+/// 200K / 400K / 1M 三档 `context_config`（1M 是默认档）。
+///
+/// 2026-10-20 本机实测（qwen/flash，自然语言填充 + 中段暗号）：
+///   · 300,117 prompt tokens（41 万汉字）→ 通过，暗号答对（26s）；
+///   · 760,671 / 913,298 / **974,343** tokens → 全部通过（25-28s，暗号都对）；
+///   · 133 万汉字（推算 ~987k tokens）+ 缺省 `max_tokens: 32000` → 上游
+///     `statusCodeValue 400` + `code 80411`（8s 即返，整轮失败不是截断）。
+/// 结论：**1M 是「输入 + max_tokens」的合计预算**，不是只看输入。想贴近上限
+/// 就把 max_tokens 调小；超了由翻译机换成可执行的说明（见 `qwenwork_stream`）。
+pub const MAX_INPUT_TOKENS: i64 = 1_000_000;
 
 /// 默认模型（客户端 `auto` 的落点）
 pub const DEFAULT_MODEL: &str = "qwen/pro";
@@ -73,25 +81,31 @@ pub const MODELS: &[ModelSpec] = &[
     ModelSpec {
         id: "qwen/pro",
         upstream: "pro",
-        label: "QwenWork Pro",
+        label: "高级",
+        price_factor: 1.0,
     },
     ModelSpec {
         id: "qwen/flash",
         upstream: "flash",
-        label: "QwenWork Flash",
+        label: "标准",
+        price_factor: 0.1,
     },
     ModelSpec {
         id: "qwen/qwen3.8-max-preview",
         upstream: "qwen3.8-max-preview",
-        label: "Qwen3.8 Max Preview",
+        label: "Qwen3.8-Max",
+        price_factor: 1.8,
     },
 ];
 
-/// 一条对外模型
+/// 一条对外模型（内置兜底表；远程目录拉到后以远程为准）
 pub struct ModelSpec {
     pub id: &'static str,
     pub upstream: &'static str,
+    /// 上游目录里的 `display_name`（中文；i18n 另有 en 版）
     pub label: &'static str,
+    /// 上游目录的 `price_factor`（相对 pro 的倍率）
+    pub price_factor: f64,
 }
 
 /// 客户端别名 → 本网关广告名（参考实现三家交叉确认的映射）。
@@ -106,23 +120,29 @@ pub const MODEL_ALIASES: &[(&str, &str)] = &[
 
 /// 把客户端传来的模型名解析成**上游 key**。
 ///
-/// 接受三种形态：广告名（`qwen/pro`）、裸上游 key（`pro`）、客户端别名
-/// （`auto` / `qwork-lite` …）。认不出返回 `None` —— 调用方**必须硬错**
-/// （静默换模型是本家与 Qoder 同类的坑：`model_config` 发错会静默降级）。
-pub fn upstream_key_for(name: &str) -> Option<&'static str> {
+/// 接受四种形态：广告名（`qwen/pro`）、任意 `qwen/<key>`（远程目录是权威，
+/// 上游新增模型不需要改代码）、裸上游 key（`pro`）、客户端别名（`auto` /
+/// `qwork-lite` …）。认不出返回 `None` —— 调用方**必须硬错**（静默换模型是
+/// 本家与 Qoder 同类的坑：`model_config` 发错会静默降级）。
+pub fn upstream_key_for(name: &str) -> Option<String> {
     let name = name.trim();
     if name.is_empty() {
-        return Some(MODELS[0].upstream);
+        return Some(MODELS[0].upstream.to_string());
     }
-    if let Some(spec) = MODELS.iter().find(|spec| spec.id.eq_ignore_ascii_case(name)) {
-        return Some(spec.upstream);
+    if let Some(rest) = name.strip_prefix("qwen/") {
+        let rest = rest.trim();
+        if !rest.is_empty() {
+            return Some(rest.to_string());
+        }
     }
-    if let Some(spec) = MODELS.iter().find(|spec| spec.upstream.eq_ignore_ascii_case(name)) {
-        return Some(spec.upstream);
+    if let Some(spec) = MODELS
+        .iter()
+        .find(|spec| spec.id.eq_ignore_ascii_case(name) || spec.upstream.eq_ignore_ascii_case(name))
+    {
+        return Some(spec.upstream.to_string());
     }
     MODEL_ALIASES
         .iter()
         .find(|(alias, _)| alias.eq_ignore_ascii_case(name))
-        .and_then(|(_, target)| MODELS.iter().find(|spec| spec.id == *target))
-        .map(|spec| spec.upstream)
+        .map(|(_, target)| target.to_string())
 }
