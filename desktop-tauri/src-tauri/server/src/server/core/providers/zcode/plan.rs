@@ -346,6 +346,7 @@ pub(super) fn build_request(
         headers,
         body: payload,
         // 上游说 Anthropic：响应帧要先折成 chat SSE 再下发
+        raw_body: None,
         // （见 `upstream::translate`）
         response: UpstreamResponse::Anthropic,
     })

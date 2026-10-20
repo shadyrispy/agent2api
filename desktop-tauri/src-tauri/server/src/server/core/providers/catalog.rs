@@ -221,6 +221,13 @@ pub(crate) fn refresh_meta(kind: ProviderKind) -> (bool, i64) {
             super::lobsterai::models::remote_refreshed(),
             super::lobsterai::models::last_refreshed_at(),
         ),
+        // 千问办公：清单来自 `GET {gateway}/api/v2/model/list`（可能 403 ⇒ 内置
+        // 三条兜底）。远端只用来**取交集**（删掉上游已下架的 key），所以
+        // 「远程拉到过」才显示为远程来源 —— 与 Loomy / CommandCode 同一口径。
+        ProviderKind::Qwenwork => (
+            super::qwenwork::models::remote_refreshed(),
+            super::qwenwork::models::last_refreshed_at(),
+        ),
     }
 }
 

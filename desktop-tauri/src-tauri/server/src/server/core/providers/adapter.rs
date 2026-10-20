@@ -141,6 +141,7 @@ use super::{catalog_cache, ProviderKind};
 /// body 还是 `Value`（不同家的改写规则不同，比如 workbuddy 要注入首条
 /// system 消息），且**不含出网代理** —— 代理是账号级的、与 provider 无关，
 /// 由编排层从账号会话里解析后自己带上。
+#[derive(Debug)]
 pub struct ChatRequestPlan {
     /// 上游完整 URL（含路径）
     pub url: String,
@@ -148,6 +149,13 @@ pub struct ChatRequestPlan {
     pub headers: Vec<(String, String)>,
     /// 已按 provider 规则改写过的请求体
     pub body: Value,
+    /// **已定稿的出站字节**（仅当「签名覆盖原始请求体」时使用）。
+    ///
+    /// `None` = 由编排层把 `body` 序列化后发送（绝大多数家）。
+    /// `Some` = 必须原样发送这串字节：COSY 一族的签名是对**编码后的字节**求的，
+    /// 让编排层再序列化一次会得到另一串字节、签名当场失效（千问办公）。
+    /// `body` 仍要给（调试报文与统计读它，那里放编码前的信封更可读）。
+    pub raw_body: Option<String>,
     /// 上游**响应**说的是哪套协议（默认 [`UpstreamResponse::Chat`]）
     pub response: UpstreamResponse,
 }
@@ -167,7 +175,23 @@ impl ChatRequestPlan {
             url,
             headers,
             body,
+            raw_body: None,
             response: UpstreamResponse::Chat,
+        }
+    }
+
+    /// 「签名覆盖原始字节」形态：`raw_body` 是**要原样发出去的那串字节**，
+    /// `body` 只是它的可读形态（调试报文与统计用）。
+    ///
+    /// 目前唯一用户是千问办公：COSY 签名对 `encode_body` 之后的字节求 MD5，
+    /// 编排层的 `serde_json::to_string(&body)` 会得到另一串字节。
+    pub fn signed_chat(url: String, headers: Vec<(String, String)>, body: Value, raw_body: String) -> Self {
+        Self {
+            url,
+            headers,
+            body,
+            raw_body: Some(raw_body),
+            response: UpstreamResponse::Qwenwork,
         }
     }
 
@@ -185,6 +209,7 @@ impl ChatRequestPlan {
             url,
             headers,
             body,
+            raw_body: None,
             response: UpstreamResponse::CommandCodeNdjson,
         }
     }
@@ -206,6 +231,7 @@ impl ChatRequestPlan {
             url,
             headers,
             body,
+            raw_body: None,
             response: UpstreamResponse::AntigravityGemini,
         }
     }
@@ -246,6 +272,14 @@ pub enum UpstreamResponse {
     /// 走翻译层的理由同上：账号轮换、限额冷却、退避重试、usage 记账与取消处理
     /// 全部留在编排层，只有字节形态在翻译器里变。
     AntigravityGemini,
+    /// 千问办公（QwenWork）的 **COSY 信封 SSE**：`data:{"body":"<内层 OpenAI chunk>"}`
+    /// 逐行下发，外层 HTTP 恒 200、真实状态在 `statusCodeValue`，且**不发**
+    /// `[DONE]`（用 `event:finish` + 统计帧收尾）。下发前折回标准 chat SSE
+    /// （见 `protocol::qwenwork_stream` 与 `upstream::translate` 的
+    /// `QwenworkToChatStream`）—— 走翻译层的理由与 Anthropic / NDJSON /
+    /// Gemini 三条逐字相同：账号轮换、限额冷却、退避重试、usage 记账与取消
+    /// 处理全部留在编排层，只有字节形态在翻译器里变。
+    Qwenwork,
     /// 智谱清言的 **SSE 混合帧**：帧是 SSE（`data: {json}`）没错，但一轮回答里
     /// 混着两种语义 —— `part.status == "init"` 的帧给的是**本拍新增的一小段**，
     /// 带 finish 的帧给的是**整段全文快照**。而 OpenAI 要的是统一口径的 delta：
@@ -1204,6 +1238,10 @@ pub fn adapter_for(kind: ProviderKind) -> &'static dyn ProviderAdapter {
         // SSE，网关恒以 stream:true 请求）+ 目录 / 积分 / 签到 + loopback 网页登录。
         // 三个载荷点见 `lobsterai/mod.rs` 的模块头
         ProviderKind::LobsterAi => &super::lobsterai::LOBSTERAI_ADAPTER,
+        // 千问办公（QwenWork）：COSY 信封转发（响应走 `UpstreamResponse::Qwenwork`
+        // 翻译层）+ 目录 + 三池额度 + device flow 登录（轮询式）。
+        // 三个坑见 `qwenwork/mod.rs` 的模块头
+        ProviderKind::Qwenwork => &super::qwenwork::QWENWORK_ADAPTER,
     }
 }
 
@@ -1319,6 +1357,9 @@ pub fn implemented_kinds() -> Vec<ProviderKind> {
         // LobsterAI：远程目录（`GET /api/models/available`）+ 有转发能力，
         // 进本列表才会被后台目录刷新调度
         ProviderKind::LobsterAi,
+        // 千问办公：远程目录（`GET /api/v2/model/list`，可能 403）+ 有转发能力，
+        // 进本列表才会被后台目录刷新调度
+        ProviderKind::Qwenwork,
     ]
 }
 

@@ -1042,16 +1042,23 @@ async fn attempt_queue(
             };
             // 序列化失败只可能是内部数据坏了（适配器给出的 body 里含不可序列化的
             // 值），按 500 收敛。同样要先给明细定稿（理由同上一条）。
-            let payload = match serde_json::to_string(&plan.body) {
-                Ok(payload) => payload,
-                Err(error) => {
-                    let gateway = GatewayError::new(format!("请求体序列化失败: {error}"));
-                    ctx.telemetry.finish_last_attempt(
-                        Some(i64::from(gateway.status_code)),
-                        Some(&gateway.message),
-                    );
-                    return Err(gateway);
-                }
+            //
+            // **签名覆盖原始字节的家（千问办公）必须原样发**：它的 COSY 签名
+            // 是对 `encode_body` 之后的字节求的，这里再序列化一次 `body` 会得到
+            // 另一串字节、上游当场判签名无效（见 `ChatRequestPlan::raw_body`）。
+            let payload = match plan.raw_body.clone() {
+                Some(raw) => raw,
+                None => match serde_json::to_string(&plan.body) {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        let gateway = GatewayError::new(format!("请求体序列化失败: {error}"));
+                        ctx.telemetry.finish_last_attempt(
+                            Some(i64::from(gateway.status_code)),
+                            Some(&gateway.message),
+                        );
+                        return Err(gateway);
+                    }
+                },
             };
             logging::verbose(
                 "[Upstream]",
@@ -1785,6 +1792,16 @@ async fn attempt_queue(
                         ctx.telemetry,
                     ))
                 }
+                // 千问办公：COSY 信封 SSE（`data:{"body":"<内层 chunk>"}`，HTTP 恒
+                // 200、真实状态在 `statusCodeValue`，且不发 `[DONE]`）。翻译机
+                // 剥信封、折错误帧、补收尾（见那台的模块头）
+                UpstreamResponse::Qwenwork => Box::pin(
+                    super::translate::QwenworkToChatStream::new(
+                        response,
+                        &wire_model,
+                        ctx.telemetry,
+                    ),
+                ),
                 // 外层 `if` 已排除它，这一支只为 match 的穷尽性存在，**不可能
                 // 走到**。真走到说明分派被改坏了：报内部错误而不是 panic
                 // （release 是 `panic=abort`，一处 panic 带走整个网关）。

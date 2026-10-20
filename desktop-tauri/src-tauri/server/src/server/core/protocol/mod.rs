@@ -64,6 +64,8 @@ pub mod commandcode_outbound;
 pub mod freeform;
 pub mod history;
 pub mod native_tool;
+/// 千问办公（QwenWork）的 COSY 信封 SSE → chat SSE（见文件模块头）
+pub mod qwenwork_stream;
 pub mod responses;
 pub mod responses_outbound;
 pub mod tool_plan;

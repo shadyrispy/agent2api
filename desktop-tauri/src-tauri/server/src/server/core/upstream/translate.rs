@@ -53,6 +53,7 @@ use crate::server::core::protocol::anthropic_outbound::ChatFromAnthropicStream;
 use crate::server::core::protocol::antigravity_stream::ChatFromAntigravityStream;
 use crate::server::core::protocol::chatglm_stream::ChatFromChatglmStream;
 use crate::server::core::protocol::commandcode_outbound::ChatFromCommandCodeStream;
+use crate::server::core::protocol::qwenwork_stream::ChatFromQwenworkStream;
 
 /// 上游 Anthropic SSE → 标准 chat SSE 的字节流（`reqwest::Response` 直接进来）。
 ///
@@ -240,6 +241,95 @@ impl Stream for CommandCodeToChatStream {
                     self.upstream_done = true;
                     // 文案已在构造时描述好（见 inner 字段说明）：原样上抛，
                     // 由下游的流 / 聚合器转成错误帧或 502
+                    return Poll::Ready(Some(Err(error)));
+                }
+            }
+        }
+    }
+}
+
+/// 上游 **千问办公 COSY 信封 SSE** → 标准 chat SSE 的字节流
+/// （`reqwest::Response` 直接进来）。
+///
+/// 与另外几台逐行同构：`响应字节 → 空闲守卫 → 状态机 → 帧队列`，错误在构造时
+/// 折进 `io::Error`，EOF 时调 `machine.finish()` 收尾。
+///
+/// ── 与其余几台的实质差别 ────────────────────────────────────
+/// 上游 **HTTP 恒 200**，真实状态在信封的 `statusCodeValue` 里，且**不发**
+/// `[DONE]`（用 `event:finish` 收尾）。所以成败判据全部在那台状态机里：
+/// 信封错误折成 chat 错误帧、完成事件之前的 EOF 折成 502 截断错误。
+pub struct QwenworkToChatStream {
+    /// 上游字节流（已描述错误、已装空闲守卫）
+    inner: futures::stream::BoxStream<'static, Result<Bytes, std::io::Error>>,
+    /// 协议状态机（信封 → chat 帧）
+    machine: ChatFromQwenworkStream,
+    /// 已翻译待下发的帧（一个上游 chunk 可能产出多帧）
+    pending: VecDeque<Bytes>,
+    /// 上游已结束（不再 poll 上游，把 pending 与收尾帧吐完即 None）
+    upstream_done: bool,
+    /// 调试模式的采集器（None = 未开启）
+    capture: Option<Arc<crate::server::core::debug_traffic::TrafficCapture>>,
+}
+
+impl QwenworkToChatStream {
+    /// `model` 是**上游真名**（下发帧里的 `model` 字段，见模块头）。
+    pub fn new(
+        response: reqwest::Response,
+        model: &str,
+        telemetry: &Arc<super::usage::RequestTelemetry>,
+    ) -> Self {
+        use futures::StreamExt;
+        let described = response.bytes_stream().map(|item| {
+            item.map_err(|error| {
+                std::io::Error::other(crate::server::core::egress::describe_error_detail(&error))
+            })
+        });
+        let guarded = super::stall::idle_guard(
+            Box::pin(described),
+            Duration::from_millis(crate::server::config::timeout_settings().stream_idle_ms()),
+        );
+        Self {
+            inner: guarded,
+            machine: ChatFromQwenworkStream::new(model),
+            pending: VecDeque::new(),
+            upstream_done: false,
+            capture: telemetry.capture(),
+        }
+    }
+}
+
+impl Stream for QwenworkToChatStream {
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        use futures::StreamExt;
+        loop {
+            // 先把转换器攒下的帧发完，再拉上游（收尾帧必须排在内容帧之后）
+            if let Some(frame) = self.pending.pop_front() {
+                return Poll::Ready(Some(Ok(frame)));
+            }
+            if self.upstream_done {
+                return Poll::Ready(None);
+            }
+            match self.inner.poll_next_unpin(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => {
+                    // 上游 EOF：状态机判定「完成」还是「截断」
+                    self.upstream_done = true;
+                    for frame in self.machine.finish() {
+                        self.pending.push_back(frame);
+                    }
+                }
+                Poll::Ready(Some(Ok(bytes))) => {
+                    if let Some(capture) = &self.capture {
+                        capture.push(&bytes);
+                    }
+                    for frame in self.machine.push(&bytes[..]) {
+                        self.pending.push_back(frame);
+                    }
+                }
+                Poll::Ready(Some(Err(error))) => {
+                    self.upstream_done = true;
                     return Poll::Ready(Some(Err(error)));
                 }
             }

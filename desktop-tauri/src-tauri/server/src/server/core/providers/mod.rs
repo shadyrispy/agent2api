@@ -118,6 +118,9 @@ pub mod catalog;
 pub mod catalog_cache;
 pub mod catalog_refresh;
 pub mod catpaw;
+/// COSY 协议签名与请求体编码（Qoder 与千问办公共用的协议栈）。
+/// 两家各有一份自己的常量与请求头，算法只有这一份 —— 见模块头。
+pub mod cosy;
 /// 智谱清言（`chatglm.cn`，桌面客户端 2.0.7）：**无状态转发 + 双凭证形态**
 /// （访客免登录可换证 / 登录账号有积分）。适配实现在 `chatglm/`：请求要
 /// 签名三件套 + 设备号（实测边界见 `chatglm/sign.rs`）、多轮 messages 必须
@@ -171,6 +174,9 @@ pub mod onboarding_memory;
 /// 不进身份体系：它是各家的共用设施，只按 provider id 记状态。
 pub mod readiness;
 pub mod qoder;
+/// 千问办公（QwenWork）：与 Qoder 同一套 COSY 协议栈，device flow 登录 +
+/// 无状态转发 + 目录 + 三池额度。见 `qwenwork/mod.rs` 的模块头。
+pub mod qwenwork;
 pub mod raccoon;
 pub mod refresh_flight;
 pub mod router;
@@ -570,6 +576,26 @@ pub enum ProviderKind {
     /// 下发、续期必须原样回传（丢了账号永远续不了期）；③ `developer` 角色上游
     /// 回 502，出站要降级成 `system`。
     LobsterAi,
+    /// 千问办公（QwenWork，`gateway.qwenwork.cn`）。适配实现在 `qwenwork/`：
+    /// **device flow 登录（可完全脱离桌面客户端）** + 无状态转发 + 目录 + 三池额度。
+    ///
+    /// ── 上游长什么样 ────────────────────────────────────────────
+    /// 与 Qoder 同一套 **COSY 协议栈**：同一个 `client_id`、同一个聊天路径
+    /// （`/algo/api/v2/service/pro/sse/agent_chat_generation`）、同一把服务端公钥、
+    /// 同一套 `Encode=1` 编码；差异只有 `cosyVersion`、客户端身份头与身份 JSON。
+    /// 签名算法因此只有一份（`providers::cosy`）。
+    ///
+    /// ── 三个会让整条链路静默失效的事实 ─────────────────────────
+    /// 1. 签名覆盖**编码后的字节** ⇒ 转发计划必须走 `ChatRequestPlan::signed_chat`
+    ///    原样发送，不能交给编排层再序列化一次；
+    /// 2. 响应是**信封 SSE**（HTTP 恒 200、状态在 `statusCodeValue`、不发 `[DONE]`）
+    ///    ⇒ 走 `UpstreamResponse::Qwenwork` 翻译层；
+    /// 3. 模型名只认 `chat_context.extra.modelConfig.key` 与 `model_config.key`，
+    ///    发错会**静默换模型** ⇒ 未知模型名硬 400。
+    ///
+    /// **没有签到**：每日免费额度在 +08:00 零点自动重置，上游没有签到动作
+    /// （不进 `CHECKIN_PROVIDERS`）。
+    Qwenwork,
 }
 
 /// 一个提供商的静态元数据。
@@ -689,6 +715,10 @@ pub const PROVIDERS: &[ProviderMeta] = &[
     // LobsterAI（网易有道「有道龙虾」）：单一入口（浏览器登录），没有地区伴生。
     // 排在末尾（后到居后）。
     ProviderMeta { id: "lobsterai", label: "LobsterAI" },
+    // 千问办公（QwenWork）：单一站点、单一入口（device flow 网页登录），
+    // 没有地区伴生。排在末尾（后到居后）。模型对外带 `qwen/` 前缀
+    // （上游 key 是 `pro` / `flash` 这种裸名，聚合清单里太容易撞车）。
+    ProviderMeta { id: "qwenwork", label: "千问办公" },
 ];
 
 /// provider id 在注册表里的下标（未知 id → None）。
@@ -778,6 +808,7 @@ pub fn kind_from_id(id: &str) -> Option<ProviderKind> {
         "modelscope-intl" => Some(ProviderKind::ModelscopeIntl),
         "atomcode" => Some(ProviderKind::Atomcode),
         "lobsterai" => Some(ProviderKind::LobsterAi),
+        "qwenwork" => Some(ProviderKind::Qwenwork),
         // 走到这里 = 上面的注册表判定已放行、这个 match 却没有对应分支：
         // 只可能是有人给 `PROVIDERS` 加了条目忘了加这里。开发期喊出来；
         // release 返回 None（见上：宁可为「未知」，不可误认成别家）。
@@ -825,6 +856,7 @@ pub const fn kind_id(kind: ProviderKind) -> &'static str {
         ProviderKind::ModelscopeIntl => "modelscope-intl",
         ProviderKind::Atomcode => "atomcode",
         ProviderKind::LobsterAi => "lobsterai",
+        ProviderKind::Qwenwork => "qwenwork",
     }
 }
 

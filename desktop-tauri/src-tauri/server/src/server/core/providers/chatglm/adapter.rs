@@ -102,6 +102,7 @@ impl ProviderAdapter for ChatglmAdapter {
             url: built.url,
             headers,
             body: built.body,
+            raw_body: None,
             response: UpstreamResponse::ChatglmSnapshot,
         })
     }

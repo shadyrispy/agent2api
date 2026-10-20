@@ -357,7 +357,9 @@ fn identity_shape_of(kind: ProviderKind) -> IdentityShape {
         | ProviderKind::Modelscope
         | ProviderKind::ModelscopeIntl
         | ProviderKind::Atomcode
-        | ProviderKind::LobsterAi => Generic,
+        | ProviderKind::LobsterAi
+        // 千问办公：身份落在 `uid`（通用链第二位），无需专属分支
+        | ProviderKind::Qwenwork => Generic,
     }
 }
 
