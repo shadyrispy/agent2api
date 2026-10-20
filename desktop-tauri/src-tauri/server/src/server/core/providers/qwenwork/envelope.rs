@@ -10,7 +10,7 @@
 //! | 只留 `type:"function"` 的工具 | Codex 会带 `namespace` / `web_search` 等内置工具，带上去**整轮 400**（不是丢弃该工具），只能静默丢弃非 function 的 |
 //! | `tool_choice` 仅在有工具时下发 | 没有工具时带上会被上游拒 |
 //! | `stream: true` | 上游只走 SSE，非流式由本网关聚合 |
-//! | `imageUrls: null` | 参考实现没有图片上行路径；声明 vision 会骗客户端（见下） |
+//! | `imageUrls: null` | 实测这条**不生效**（模型答「当前对话没有图片」）；图片走 messages 的 content 数组（见下） |
 //!
 //! ── 思考档位 ────────────────────────────────────────────────
 //! 三个模型都是**仅推理**（`onlyReasoning: true`）：把思考等级关掉（`none`）
