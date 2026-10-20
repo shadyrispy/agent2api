@@ -394,6 +394,10 @@ impl AccountStore {
             // （refreshToken / uuid / 两个 keyfrom）。它们都是「能续期」的条件，
             // 一起下发等于把账号的续期能力送出去；界面要的只是 canRefresh 布尔。
             self.to_lobsterai_public_account(record)
+        } else if record.provider() == super::QWENWORK_PROVIDER_ID {
+            // 千问办公：公开形态要摘掉两个令牌本体与 **machineId**
+            // （设备码与 token 配套进 COSY 签名，同样不该随账号列表下发）
+            self.to_qwenwork_public_account(record)
         } else if record
             .provider()
             .starts_with(crate::server::core::custom_providers::ID_PREFIX)

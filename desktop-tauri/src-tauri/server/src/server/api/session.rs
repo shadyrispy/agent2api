@@ -341,6 +341,30 @@ pub async fn login_start(State(state): State<ServerState>, body: Bytes) -> Respo
         return ok_json(json!({ "state": task_state, "authUrl": auth_url,
             "edition": task_edition, "provider": "atomcode" }));
     }
+    // 千问办公（QwenWork）：**device flow + PKCE 的服务端轮询**（与 AtomCode /
+    // OfficeAce 同一形态，见 `core::login::qwenwork` 的模块头）—— 授权页在
+    // 网关上，回调落在网关自己的 `/oauth/callback`，**永远不回到本机**。
+    // 授权地址是本地拼的（不需要网络往返），用户登完由后台任务轮询取票。
+    // 响应形状与另外几条登录链一致（`{state, authUrl, edition, provider}`）。
+    if kind == crate::server::core::providers::ProviderKind::Qwenwork {
+        let handle = match state.login().start_qwenwork_login() {
+            Ok(handle) => handle,
+            Err(error) => return management_error(400, error),
+        };
+        let (task_state, auth_url, task_edition) = match state
+            .login()
+            .wait_for_auth_url(&handle, Duration::from_millis(AUTH_URL_WAIT_MS))
+            .await
+        {
+            Ok(values) => values,
+            Err(error) => {
+                logging::log("[Login]", &format!("❌ 发起千问办公登录失败: {error}"));
+                return management_error(502, error);
+            }
+        };
+        return ok_json(json!({ "state": task_state, "authUrl": auth_url,
+            "edition": task_edition, "provider": "qwenwork" }));
+    }
     // Cline：**设备授权登录**（WorkOS RFC 8628）。形态上介于「网页登录」与
     // 「Qoder 设备授权」之间：同步问上游要 user_code 与授权页地址（一次 POST），
     // 把地址交给界面打开；用户确认后由后台任务轮询换令牌。

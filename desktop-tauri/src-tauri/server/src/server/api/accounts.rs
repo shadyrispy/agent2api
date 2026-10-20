@@ -1336,6 +1336,16 @@ pub async fn add_account(state: &ServerState, body: &Bytes) -> Response {
                 "LobsterAI 只能通过「网页登录」添加：它的续期需要换码时下发的 uuid 与 keyfrom，粘贴给不出这三项",
             );
         }
+        // 千问办公：**只有 device flow 登录一条路**（如实拒绝粘贴路径）。
+        // 它的请求签名要 uid + machineId + 一对令牌**配套**（签名覆盖编码后的
+        // 字节，见 `providers::qwenwork::chat` 的模块头），三者手填极易配出一个
+        // 「能登录、签不发请求」的账号；宁可让用户走一次浏览器登录。
+        Some(crate::server::core::providers::ProviderKind::Qwenwork) => {
+            return management_error(
+                400,
+                "千问办公只能通过「网页登录」添加（device flow）：请求签名需要 uid 与设备码和令牌配套",
+            );
+        }
         // WorkBuddy 系的两家（国内版 / 国际版）：同一套凭证形态与落账号路径，
         // 差别只有归属 —— provider id 自己就是归属（拆家后不再从 payload 里的
         // `edition` 反推：那是账号的属性，而落哪一家是身份问题）。
@@ -1627,6 +1637,13 @@ pub async fn refresh_account(state: &ServerState, body: &Bytes) -> Response {
     // 悄悄过期到只能重新网页登录 —— 而那一轮登录是用户手动做的。
     if state.store().lobsterai_account_record(&id).is_some() {
         return refresh_provider_account(state, &id, ProviderKind::LobsterAi).await;
+    }
+    // 千问办公：续期走 deviceToken/refresh（**会轮换** refresh token，必须
+    // 单飞 + 写回）。**这条不能省**：漏了就落到 workbuddy 兜底链路，用户点
+    // 「刷新 Token」收到的是腾讯那侧的错（与 CodeArts/Trae/OfficeAce 同一理由），
+    // 而千问的 refresh token 每轮都会变旧。
+    if state.store().qwenwork_account_record(&id).is_some() {
+        return refresh_provider_account(state, &id, ProviderKind::Qwenwork).await;
     }
     // Accio（两个地区）：走适配器的强制刷新（`POST /api/auth/refresh_token`，
     // 结果按「比较再写」回写）。两个地区各查一次 —— 账号集合按 provider 隔离，

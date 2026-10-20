@@ -111,6 +111,7 @@ pub mod commandcode_accounts;
 pub mod custom_accounts;
 pub mod kuku_accounts;
 pub mod lobsterai_accounts;
+pub mod qwenwork_accounts;
 pub mod loomy_accounts;
 pub mod modelscope_accounts;
 pub mod monkeycode_accounts;
@@ -257,6 +258,12 @@ pub(crate) const ATOMCODE_PROVIDER_ID: &str = crate::server::core::providers::ki
 /// [`LOOMY_PROVIDER_ID`] 的口径）。账号形态见 `lobsterai_accounts.rs`。
 pub(crate) const LOBSTERAI_PROVIDER_ID: &str = crate::server::core::providers::kind_id(
     crate::server::core::providers::ProviderKind::LobsterAi,
+);
+
+/// 千问办公（QwenWork）provider id（**从注册表推导**，同
+/// [`LOOMY_PROVIDER_ID`] 的口径）。账号形态见 `qwenwork_accounts.rs`。
+pub(crate) const QWENWORK_PROVIDER_ID: &str = crate::server::core::providers::kind_id(
+    crate::server::core::providers::ProviderKind::Qwenwork,
 );
 
 /// 智谱清言（`chatglm.cn`）provider id（**从注册表推导**，同

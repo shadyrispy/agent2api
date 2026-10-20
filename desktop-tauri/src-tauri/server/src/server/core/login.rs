@@ -35,6 +35,7 @@ mod catpaw;
 pub mod codearts;
 mod qoder;
 mod officeace;
+mod qwenwork;
 mod trae;
 mod zcode;
 

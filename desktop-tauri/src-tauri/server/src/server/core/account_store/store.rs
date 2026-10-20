@@ -616,6 +616,22 @@ impl AccountStore {
                 }
             }
         }
+        // ── 千问办公的签名素材（`qwenwork::credentials` 用）────────────
+        // COSY 签名要 `machineId`（每账号一份设备码），而会话是转发链交给
+        // 适配器的唯一形态；通用键里没有它。与 ZCode / Antigravity / OfficeAce
+        // 同一手法：本家才注入，别家逐字不变，空值不写。
+        if record.provider() == crate::server::core::account_store::QWENWORK_PROVIDER_ID {
+            if let Some(object) = session.as_object_mut() {
+                let machine_id = record
+                    .get("machineId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                if !machine_id.is_empty() {
+                    object.insert("machineId".to_string(), Value::String(machine_id.to_string()));
+                }
+            }
+        }
         session
     }
 
