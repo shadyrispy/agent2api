@@ -121,6 +121,9 @@ export const PROVIDER_ICONS: Record<string, string> = {
   // 该处是 24×24 的 SVG，已栅格化成 256×256 RGBA 入库（与 orcaterm / officeace
   // 同一处置）。
   lobsterai: 'assets/providers/lobsterai.png',
+  // 千问办公（QwenWork）：取自官网 qwenwork.cn 的产品图标（与 AtomCode 同一
+  // 处置：用产品形象而不是站点 favicon），归一成 256×256 入库
+  qwenwork: 'assets/providers/qwenwork.png',
 }
 
 /**

@@ -1064,6 +1064,39 @@ const LOBSTERAI: ProviderConfig = {
 }
 
 /** 内置家的表单块，顺序与旧 ADD_FORMS 一致（只影响 DOM 里的块顺序，不影响界面） */
+/**
+ * 千问办公（QwenWork，`gateway.qwenwork.cn`）：一家一个 provider，没有地区 /
+ * 额度池之分。
+ *
+ * ── 只有一条添加路径：device flow 网页登录（服务端轮询取票）──────
+ * 授权页在网关上，授权结果由**服务端**记录（回调落在网关自己的
+ * `/oauth/callback`，**不回到本机**），所以网关只需轮询 `/deviceToken/poll`
+ * 就能拿到票 —— 用户完成浏览器登录后账号自动加入，不必复制任何地址
+ * （见后端 `providers::qwenwork::oauth` 与 `core::login::qwenwork`）。
+ *
+ * ── 没有粘贴路径 ────────────────────────────────────────────
+ * 请求签名要 `uid` + 每账号一份的 `machineId` + 一对令牌**配套**（COSY 签名
+ * 覆盖编码后的字节），手填三者极易配出「能登录、签不发请求」的账号；后端
+ * `api::accounts` 对粘贴入口始终 400，这里也就不提供手填段。`fields` 留空是
+ * 被 `ProviderConfig` 逼的（该键在类型里必填），不是漏写。
+ *
+ * ── 没有签到 ────────────────────────────────────────────────
+ * 每日免费额度在次日 00:00（+08:00）**自动重置**，上游没有签到动作 ——
+ * 不要造一个点了必然报错的签到按钮。
+ */
+const QWENWORK: ProviderConfig = {
+  provider: 'qwenwork',
+  label: t('千问办公'),
+  desktop: false,
+  webLogin: {
+    // 整段是一个 t() 键：扫描器只认字符串字面量（拼接串提不到键），所以不拆行
+    noteHtml: t('打开 <b>千问办公 / QwenWork</b>的授权页并登录你的账号：登录完成后网关会自动<b>轮询取票</b>并把账号加入列表（授权回调由网关自身终结，不回到本机，因此无需回填任何地址；浏览器最后跳到 <code>qwenwork-cn://</code> 打不开是正常的）。每日免费额度在次日 00:00 自动重置，本家没有签到动作。'),
+    button: t('打开授权页'),
+    busyText: t('等待千问办公登录完成…'),
+  },
+  fields: [],
+}
+
 export const BUILTIN_CONFIGS: ProviderConfig[] = [
   RACCOON,
   CATPAW,
@@ -1118,6 +1151,8 @@ export const BUILTIN_CONFIGS: ProviderConfig[] = [
   // LobsterAI（网易有道「有道龙虾」）：只有浏览器登录一条入口，排在末尾
   // （与后端注册表 PROVIDERS 的排列一致，后到居后）
   LOBSTERAI,
+  // 千问办公（QwenWork）：只有 device flow 网页登录一条入口，排在末尾
+  QWENWORK,
 ]
 
 /** WorkBuddy 的块 id（结构特殊，单独一个组件） */

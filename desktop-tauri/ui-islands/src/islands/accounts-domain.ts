@@ -331,6 +331,16 @@ const PROVIDER_FEATURES: Record<string, ProviderFeatures> = {
   // `expiry: 'expiresAt'` —— 落盘写的是毫秒 `expiresAt`（显式 > createdAt +
   //   expiresIn > JWT 的 `exp`），与 atomcode 同一条教训。
   lobsterai: { usage: true, creditDetail: true, edition: false, identifier: 'userId', expiry: 'expiresAt' },
+  // 千问办公（QwenWork）。各位各有出处：
+  // `usage: true` —— 三池额度（每日免费 / 套餐 / 长期），后端 `query_usage`
+  //   读 `https://qwenwork.cn/user/wallets`（见 `providers/qwenwork/usage.rs`）。
+  // `creditDetail: false` —— 本家**没有逐份明细**：三池就是全部明细，后端
+  //   `credits` 恒为空数组，开户入口只会挂一个空弹层。
+  // `edition: false` —— 单一站点，没有国际版。
+  // `identifier: 'uid'` —— 身份键取 `uid`（COSY 签名也要它；落盘字段名就是 uid）。
+  // `expiry: 'expiresAt'` —— device token 的到期时刻（ISO 或 JWT 的 exp，登录
+  //   与续期时归一成毫秒落盘，见 `providers/qwenwork/oauth.rs`）。
+  qwenwork: { usage: true, creditDetail: false, edition: false, identifier: 'uid', expiry: 'expiresAt' },
   // MonkeyCode（长亭科技）的两个站点。此前**漏登记**（后端 `PROVIDERS` 有、本表没有），
   // 于是它掉进 GENERIC_FEATURES：余额列一律显示「—」（`supportsUsage` 走兜底 false），
   // 标识列按 `userId` 读成空，有效期列去读一个不存在的 `tokenExpiresAt`。
